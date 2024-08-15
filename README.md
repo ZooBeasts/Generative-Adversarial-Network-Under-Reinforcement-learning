@@ -5,3 +5,4 @@
 
 ### Aim of the project is finding consistent generation of disordered, spare type of waveguide geometries that understand nonlinear chaotic dynamic in light propagation in chaotic waveguides.
 
+![image](https://github.com/user-attachments/assets/4a3265d5-8458-4994-a4d2-10810a22edca)
