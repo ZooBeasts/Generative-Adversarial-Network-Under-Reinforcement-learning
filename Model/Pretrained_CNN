@@ -1,0 +1,67 @@
+class PretrainedCNN(nn.Module):
+    def __init__(self):
+        super(PretrainedCNN, self).__init__()
+        # CNN branch for image data
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=0),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=0),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
+        )
+        self.flatten = nn.Flatten()
+        self.fc_cnn = nn.Sequential(
+            nn.Linear(256 * 6 * 6, 256),
+            nn.ReLU(),
+        )
+
+        # Separate linear layer for position data
+        self.fc_position = nn.Sequential(
+            nn.Linear(400, 400),  # Process the positional data to 200 features
+            nn.LeakyReLU(),
+            # nn.Linear(200, 200),  # Further reduce to 128 features
+            # nn.LeakyReLU(),
+        )
+
+        # Learnable weights for combining image and position features
+        self.w_img = nn.Parameter(torch.tensor(1.0))  # Initial weight for image data
+        self.w_pos = nn.Parameter(torch.tensor(1.0))  # Initial weight for positional data
+
+        # Final layer to combine features and produce the output
+        self.fc_combined = nn.Sequential(
+            nn.Linear(256 + 400, 256),  # Combine CNN features (256) and positional features (128)
+            nn.LeakyReLU(),
+            # nn.Linear(256, 128),
+            # nn.LeakyReLU(),
+            nn.Linear(256, 21),  # Output 21-point regression
+        )
+
+    def forward(self, image, position):
+        # Process image data through the CNN branch
+        x_img = self.encoder(image)
+        x_img = self.flatten(x_img)
+        x_img = self.fc_cnn(x_img)
+
+        # Process positional data through the linear layers
+        x_pos = self.fc_position(position)
+
+        # Normalize weights (optional)
+        # w_img_norm = torch.sigmoid(self.w_img)
+        # w_pos_norm = torch.sigmoid(self.w_pos)
+
+        # Or apply softmax to ensure the weights sum to 1
+        weights = torch.softmax(torch.stack([self.w_img, self.w_pos]), dim=0)
+        w_img_norm = weights[0]
+        w_pos_norm = weights[1]
+
+        # Combine the features with normalized learnable weights
+        combined_features = torch.cat((w_img_norm * x_img, w_pos_norm * x_pos), dim=1)
+
+        # Pass through final layers to produce the output
+        out = self.fc_combined(combined_features)
+
+        return out
