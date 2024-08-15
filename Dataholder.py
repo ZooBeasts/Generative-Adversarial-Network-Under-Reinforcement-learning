@@ -4,29 +4,10 @@ import cv2
 from os.path import join
 import torch
 import numpy as np
-from sklearn import preprocessing
 
-Scaler = preprocessing.MinMaxScaler()
+
 
 dataindex = 305
-
-class MMIUnseenDataset(Dataset):
-
-    def __init__(self, z_dim,points_path):
-        self.data = pd.read_csv(points_path,header=None).to_numpy()
-        self.z_dim = z_dim
-
-    def __getitem__(self,index):
-        item = self.data[index]
-        # print(item)
-        # print(item.shape)
-        # points = item[0:dataindex-1].astype(np.float64)
-        points = torch.from_numpy(item.astype(np.float64))
-        points = torch.hstack([points, torch.randn(self.z_dim - len(points))])
-        points = points.reshape([self.z_dim, 1, 1])
-        # print(points.shape)
-        return points
-
 
 
 class MMIDataset(Dataset):
@@ -78,8 +59,8 @@ def get_loader(
         batch_size,
         z_dim,
         points_path='C:/',
-        img_folder='C:/Users/w',
-        points_original = 'C:/Users/Administv',
+        img_folder='C:/',
+        points_original = 'C:/',
         shuffle=True,
 ):
     return DataLoader(MMIDataset(img_size, z_dim, points_path, img_folder, points_original),
