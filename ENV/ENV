@@ -1,0 +1,154 @@
+class ENV:
+    def __init__(self, generator, critic, pre_trained_cnn, device, num_layers, opt_gen, stability_threshold=0.1,
+                 max_no_improvement_epochs=100):
+        self.generator = generator
+        self.critic = critic
+        self.pre_trained_cnn = pre_trained_cnn
+        self.device = device
+        self.num_layers = num_layers
+        self.opt_gen = opt_gen
+
+        # Conditions for monitoring
+        self.stability_threshold = stability_threshold
+        self.max_no_improvement_epochs = max_no_improvement_epochs
+        self.no_improvement_counter = 0
+        self.best_loss = float('inf')
+        self.loss_window = []
+        self.max_window_size = 10  # Number of epochs to consider for loss stability
+
+    # @torch.no_grad()
+    def extract_positions(self, fake_images):
+        positions_batch = []
+        max_positions = 200  # Maximum number of positions
+
+        for b in range(fake_images.size(0)):  # Loop over batch size
+            positions = []
+            fake_image_np = fake_images[b].detach()  # CHW for this specific image in the batch
+            fake_rescaled = ((fake_image_np + 1) * 127.5).clamp(0, 255).byte()
+
+            # Apply thresholding: Convert all values above 100 to 255, and the rest to 0
+            fake_thresholded = torch.where(fake_rescaled > 130, torch.tensor(255, dtype=torch.uint8),
+                                           torch.tensor(0, dtype=torch.uint8))
+
+            # Extract positions where the pixel value is 255
+            for i in range(fake_thresholded.shape[1]):  # Height (H)
+                for j in range(fake_thresholded.shape[2]):  # Width (W)
+                    if fake_thresholded[0, i, j] == 255:  # Assuming single-channel
+                        positions.append((i / 100, j / 100))  # Normalize positions
+
+            # Ensure there are exactly `max_positions` positions
+            if len(positions) < max_positions:
+                # Add random positions if fewer than `max_positions` are found
+                while len(positions) < max_positions:
+                    random_position = (random.uniform(0, fake_thresholded.shape[1] / 100),
+                                       random.uniform(0, fake_thresholded.shape[2] / 100))
+                    positions.append(random_position)
+            elif len(positions) > max_positions:
+                # Randomly sample `max_positions` if more positions are found
+                positions = random.sample(positions, max_positions)
+
+            # Flatten positions into a single list of values
+            flattened_positions = [item for sublist in positions for item in sublist]
+            positions_tensor = torch.tensor(flattened_positions, dtype=torch.float32).to(fake_images.device)
+
+            positions_batch.append(positions_tensor)
+
+        # Stack positions from all images in the batch into a single tensor
+        positions_batch_tensor = torch.stack(positions_batch)
+
+        # print(f"Positions Batch Tensor Shape: {positions_batch_tensor.shape}")
+
+        return positions_batch_tensor
+
+    def step(self, action, z1, z2, points, points21,points_original):
+        # If no improvement for too long, adjust or stop certain actions
+        if self.no_improvement_counter > self.max_no_improvement_epochs:
+            print("No improvement for 100 epochs, reducing DQN aggressiveness.")
+            action = 0  # Reset action to safer action (e.g., reducing learning rate)
+            self.no_improvement_counter = 0  # Reset counter after action adjustment
+
+        # Apply the action (including the reset action)
+        if action == 0:
+            # Adjust learning rate
+            for g in self.opt_gen.param_groups:
+                g['lr'] = g['lr'] * 0.9
+
+        elif action == 1:
+            # Modify latent vector
+            z1 = z1 * 1.05
+
+        elif action == 2:
+            z2 = z2 * 1.05
+
+        elif action == 3:
+            # Adjust dropout rate in generator
+            for module in self.generator.modules():
+                if isinstance(module, torch.nn.Dropout):
+                    module.p = max(0.1, min(0.5, module.p + 0.05))
+        #
+        # elif action == 4:
+        #     # Slightly modify an intermediate feature map
+        #     specific_layer_index = np.random.randint(0, self.num_layers)
+        #     with torch.no_grad():
+        #         for i, layer in enumerate(self.generator.net):
+        #             if isinstance(layer, nn.ConvTranspose2d) and i == specific_layer_index:
+        #                 layer.weight += torch.randn_like(layer.weight) * 0.001
+
+        elif action == 4:
+            # Apply a slight perturbation to all generator parameters
+            with torch.no_grad():
+                for param in self.generator.parameters():
+                    param = param + torch.randn_like(param) * 0.001
+
+        # Generate fake images and continue with the rest of the step function
+        fake = self.generator(points, z1, z2)
+        # fake_denoised = fake.clone()  # Clone the tensor to avoid in-place modification
+        # fake_denoised[fake_denoised <= 100] = 0
+        # fake_denoised[fake_denoised > 100] = 255
+
+        extracted_positions = self.extract_positions(fake)
+
+        # Predict points using pre-trained CNN
+        predicted_points = self.pre_trained_cnn(fake, extracted_positions)
+        print('predicted  points shape', predicted_points.shape)
+        # interpolated_predicted_points = interpolate_points(predicted_points, target_size=200)
+        mse = torch.nn.MSELoss()(predicted_points, points_original).item()
+        reward = -mse  # Reward is negative MSE to encourage minimizing error
+
+        # Update loss window and check for stability
+        self.loss_window.append(mse)
+        if len(self.loss_window) > self.max_window_size:
+            self.loss_window.pop(0)
+
+        if np.std(self.loss_window) > self.stability_threshold:
+            # If loss is too unstable, take corrective action
+            reward -= 1  # Penalize instability
+            print("Instability detected. Penalizing reward.")
+
+        # Check for improvement
+        if mse < self.best_loss:
+            self.best_loss = mse
+            self.no_improvement_counter = 0
+        else:
+            self.no_improvement_counter += 1
+
+        # Critic evaluation (needed for done condition)
+        critic_real = self.critic(img_real, points21).reshape(-1)
+        critic_fake = self.critic(fake, points21).reshape(-1)
+
+        done = torch.mean(critic_fake) > torch.mean(critic_real)
+
+        # Determine new state (difference between predicted and real points)
+        new_state = (predicted_points - points_original).detach().cpu().numpy().flatten()
+        print(f'new_state.shape is {new_state.shape}')
+
+        return new_state, reward, done
+
+    def reset(self):
+        # Reset conditions or counters if necessary
+        self.no_improvement_counter = 0
+        self.loss_window = []
+        return torch.zeros(21)
+
+    def render(self):
+        pass
