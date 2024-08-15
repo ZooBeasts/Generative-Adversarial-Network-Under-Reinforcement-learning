@@ -1,4 +1,4 @@
-# Enhanced Disordered Waveguide Inverse Design Using a Dual-Discriminator GAN with Agent-Guided DQN Integration for Conditioned Geometries Generation
+# Enhanced Disordered Waveguide Inverse Design Using a Dual-Discriminator GAN with Agent-Guided Integration for Conditioned Geometries Generation
 
 
 ### This is the following up project of generative model for multi-purposes inverse design disordered waveguides, we reconstruct the whole project. The RL is into as a supervisor into the generator along with Critc to double guiding the generation processes.
