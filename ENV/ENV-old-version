@@ -75,7 +75,7 @@ class ENV:
 
         elif action == 1:
             # Modify latent vector
-            z1 = z1 * 1.05
+            z1 = z1 * 1.05 
 
         elif action == 2:
             z2 = z2 * 1.05
