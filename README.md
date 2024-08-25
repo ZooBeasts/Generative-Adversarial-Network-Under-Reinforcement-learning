@@ -1,8 +1,9 @@
 # Enhanced Disordered Waveguide Inverse Design Using a Generative Adversarial Network with Agent-Guided Integration for Nonlinear Conditioned Geometries Generation
 
 
-### This is the following up project of generative model for multi-purposes inverse design disordered waveguides, we reconstruct the whole project. The RL is into as a supervisor into the generator along with Critc to double guiding the generation processes.
+### This is the follow-up project of a generative model for multi-purpose inverse design disordered waveguides, we reconstruct the whole project. The RL is a supervisor in the generator along with Critic to double guide the generation processes.
 
-### Aim of the project is finding consistent generation of disordered, spare type of waveguide geometries that understand nonlinear chaotic dynamic in light propagation in nonlinear regimes 
+### The aim of the project is to find a consistent generation of disordered, spare type of waveguide geometries that understand the nonlinear chaotic dynamics in light propagation in nonlinear regimes 
 
-![image](https://github.com/user-attachments/assets/4a3265d5-8458-4994-a4d2-10810a22edca)
+![image](https://github.com/user-attachments/assets/51666bea-27d3-47ce-b778-c0dfe15de0cc)
+
