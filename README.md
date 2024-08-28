@@ -1,5 +1,5 @@
 # Enhanced Disordered Waveguide Inverse Design Using a Generative Adversarial Network with Agent-Guided Integration for Nonlinear Conditioned Geometries Generation
-# Ziheng Guo<sup>1</sup>, Andrea Di Falco<sup>1</sup>
+## Ziheng Guo<sup>1</sup>, Andrea Di Falco<sup>1</sup>
 
 
 ### This is the follow-up project of a generative model for multi-purpose inverse design disordered waveguides, we reconstruct the whole project. The RL is a supervisor in the generator along with Critic to double guide the generation processes.
