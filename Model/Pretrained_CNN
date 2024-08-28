@@ -1,3 +1,6 @@
+import torch
+import torch.nn as nn
+
 class PretrainedCNN(nn.Module):
     def __init__(self):
         super(PretrainedCNN, self).__init__()
