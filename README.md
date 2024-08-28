@@ -2,20 +2,21 @@
 ## Ziheng Guo<sup>1</sup>, Andrea Di Falco<sup>1</sup>
 
 
-### This is the follow-up project of a generative model for multi-purpose inverse design disordered waveguides, we reconstruct the whole project. The RL is a supervisor in the generator along with Critic to double guide the generation processes.
+### This project is a continuation of work on a generative model designed for the inverse design of disordered waveguides, particularly focused on achieving multi-purpose functionalities. The project involves a complete reconstruction of the previous model, integrating Reinforcement Learning (RL) as a supervisory mechanism in the generator, alongside a Critic, to enhance the guidance of the generation process.
 
-### The aim of the project is to find a consistent generation of disordered, spare type of waveguide geometries that understand the nonlinear chaotic dynamics in light propagation in nonlinear regimes 
+The primary objective is to develop a model that can consistently generate disordered, sparse waveguide geometries that accurately capture the nonlinear chaotic dynamics associated with light propagation in nonlinear regimes.
+
+The effectiveness of this approach has been validated, as demonstrated by a significant improvement in the generator’s accuracy. The proportion of generated geometries that match the desired optical conditions has increased from 0.1% to 30%, meaning that now 30 out of 100 generated images meet the criteria, compared to just one image previously. However, this improvement is still under statistical consideration.
+
+During the training process, the DQN (Deep Q-Network) takes action after a warm-up period, adjusting parameters such as the learning rate, latent vectors, dropout rate, and perturbation parameters. It also plays a crucial role in preventing mode collapse through parameter rerolls and hard resets.
+
+However, Conditional Batch Normalization (CBN) has introduced challenges by altering the brightness of generated images through the beta parameter. This change in brightness affects pixel values post-normalization, sometimes causing certain pixel values to become zero or very small, effectively making them disappear or become less significant.
+
+The generator’s performance is now evaluated using 50 images per data batch (e.g., 64x50 = 3200 images) after post-normalization, with positions extracted and fed into a pre-trained model. The model’s performance is assessed using MSE (Mean Squared Error) threshold matching. The pre-trained model achieves a training loss of 1.9e-5, validation loss of 1.87e-5, and test loss of 2.4e-5 on the disordered dataset. Consequently, the MSE thresholds are set at [0.09, 0.008, 0.001, 0.0005].
 
 ![image](https://github.com/user-attachments/assets/51666bea-27d3-47ce-b778-c0dfe15de0cc)
 
-The idea has been proven to be correct. The generator's accuracy in correctly generating geometries matching optical conditions has risen from 0.1 % to 1% to 10% to 30%. In other words, 100 images used to be 1 image correctly matched to now 30 images. But this is still statistically speaking.
 
-DQN takes action after warm-up epochs. These actions include changing the learning rate, adjusting the latent vectors, reducing the drop-out rate, and perturbing the parameters.
-Mode collapse prevention is controlled by DQN with parameters rerolls and hard reset. Conditional Batch Normalizations along with Batch Normalization mixing control have been considered, but beta in CBN changes the brightness of the fake images, causing hole probability values to shift.  
-
-Measurement of how good the generator is now determined by 50 images per data per batch, such as 64x50 = 3200 images after post-normalization and extract positions feeding into the pre-trained model, by MSE threshold matching. During the training, the generator creates more matching condition geometries.  
-The pre-trained model training loss is 1.9e-5 and val loss is 1.87e-5 and test loss is 2.4e-5 in disordered dataset.
-Therefore, the MSE threshold set is [0.09, 0.008, 0.001,0.0005]
 
 
 
