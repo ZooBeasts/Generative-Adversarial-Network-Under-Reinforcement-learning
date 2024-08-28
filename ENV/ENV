@@ -1,0 +1,335 @@
+import torch
+from collections import deque
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+class ENV:
+    def __init__(self, generator, critic, pre_trained_cnn, device, num_layers, opt_gen, stability_threshold=0.1,
+                 max_no_improvement_epochs=100, replay_buffer_size=10000, batch_size=64,
+                 stability_epochs=5):
+        self.generator = generator
+        self.critic = critic
+        self.pre_trained_cnn = pre_trained_cnn
+        self.device = device
+        self.num_layers = num_layers
+        self.opt_gen = opt_gen
+        # Conditions for monitoring
+        self.stability_threshold = stability_threshold
+        self.max_no_improvement_epochs = max_no_improvement_epochs
+        self.no_improvement_counter = 0
+        self.best_loss = float('inf')
+        self.previous_loss = float('inf')
+        self.loss_window = []
+        self.max_window_size = 20  # Number of epochs to consider for loss stability
+        # Experience Replay
+        self.replay_buffer = deque(maxlen=replay_buffer_size)
+        self.batch_size = batch_size
+        self.mse_values = []
+        self.mse_window_size = 30
+        self.successful_actions = set()
+        self.previous_params = None
+        self.stability_epochs = stability_epochs
+        self.current_epoch = 0
+
+
+
+    def save_parameters(self):
+        params = {name: param.clone() for name, param in self.generator.named_parameters()}
+        print("Saving parameters:")
+        torch.save(params, 'params.pth')
+        return params
+
+    def save_parameters_2(self):
+        params = {name: param.clone() for name, param in self.generator.named_parameters()}
+        # print("Saving parameters:")
+        torch.save(params, 'dqnparams.pth')
+        return params
+
+    def load_parameters(self, saved_params):
+        # Load the saved state of the generator's parameters
+        if saved_params is None:
+            raise ValueError("No parameters to load.")
+        for name, param in self.generator.named_parameters():
+            if name in saved_params:
+                param.data.copy_(saved_params[name].data)
+            else:
+                raise ValueError(f"Parameter {name} not found in saved parameters.")
+
+
+    def extract_positions(self, processed_images):
+        positions_batch = []
+        max_positions = 200  # Maximum number of positions
+
+        for b in range(processed_images.size(0)):  # Loop over batch size
+            positions = []
+            fake_image_np = processed_images[b].detach().cpu().numpy()  # CHW for this specific image in the batch
+
+            # Extract positions where the pixel value is 255 (white)
+            for i in range(fake_image_np.shape[1]):
+                for j in range(fake_image_np.shape[2]):
+                    if fake_image_np[0, i, j] == 1:  # Assuming single-channel
+                        positions.append((i / 100, j / 100))  # Normalize positions
+
+                    # Ensure there are exactly `max_positions` positions
+            if len(positions) < max_positions: # Add random positions if fewer than `max_positions` are found
+                while len(positions) < max_positions:
+                    random_position = (random.uniform(0, fake_image_np.shape[1] / 100),
+                                       random.uniform(0, fake_image_np.shape[2] / 100))
+                    positions.append(random_position)
+
+            elif len(positions) > max_positions:  # Randomly sample `max_positions` if more positions are found
+                positions = random.sample(positions, max_positions)
+
+            # Flatten positions into a single list of values
+            flattened_positions = [item for sublist in positions for item in sublist]
+            positions_tensor = torch.tensor(flattened_positions, dtype=torch.float32).to(processed_images.device)
+
+            positions_batch.append(positions_tensor)
+
+        # Stack positions from all images in the batch into a single tensor
+        positions_batch_tensor = torch.stack(positions_batch)
+
+        return positions_batch_tensor
+
+    @staticmethod
+    def process_image_tensor(img_tensor):
+        img_tensor = ((img_tensor + 1) * 127.5).clamp(0, 255)
+
+        # Convert to integer type for thresholding
+        img_tensor = img_tensor.byte()
+        # Thresholding
+        img_tensor[img_tensor <= 130] = 0
+        img_tensor[img_tensor > 130] = 255
+
+        # Normalize the binary image to [-1, 1]
+        img_tensor = img_tensor / 255.0  # Convert to [0, 1]
+        img_tensor = img_tensor * 2 - 1  # Convert to [-1, 1]
+
+        return img_tensor
+
+
+    def visualize_images(self,images, num_images=5):
+        # Plot the first few processed images
+        plt.figure(figsize=(10, 2))
+        for i in range(num_images):
+            plt.subplot(1, num_images, i + 1)
+            plt.imshow(images[i].squeeze().cpu().numpy(), cmap='gray')
+            plt.axis('off')
+        plt.show()
+
+    def step(self, action, z1, z2, points, points21, points_original, epoch,warmup_epochs, num_sample=10):
+        if epoch == warmup_epochs:
+            print("Saving parameters after warm-up period.")
+            self.previous_params = self.save_parameters()
+            if self.previous_params is None:
+                raise ValueError("Parameters were not saved correctly.")
+            self.current_epoch = epoch
+            
+
+        if epoch > warmup_epochs and epoch % self.stability_epochs == 0:
+            print("Saving parameters at the start of the stability interval.")
+            self.previous_params = self.save_parameters()
+            self.current_epoch = epoch
+
+            # Apply the action (including the reset action)
+            if action == 0:
+                print("Action 0: Reducing learning rate.")
+                # Calculate average gradient norm only for parameters with gradients
+                grad_norms = [torch.norm(param.grad) for param in self.generator.parameters() if param.grad is not None]
+                if grad_norms:  # Ensure there are gradients to average
+                    avg_grad_norm = torch.mean(torch.stack(grad_norms))
+                    scale_factor = 0.9 if avg_grad_norm > 0.1 else 1.1
+                    for g in self.opt_gen.param_groups:
+                        g['lr'] = g['lr'] * scale_factor
+                        print(f"Learning rate adjusted to {g['lr']:.7f}")
+                else:
+                    raise ValueError("No gradients to average for learning rate adjustment.")
+
+            elif action == 1:
+                print("Action 1: Z1 Latent Space Manipulation")
+                # Latent Space Manipulation
+                grad_sign = torch.sign(z1.grad) if z1.grad is not None else torch.ones_like(z1)
+                z1 = z1 + 0.05 * grad_sign * z1
+                z1 = z1 + torch.randn_like(z1) * 0.01  # Noise Injection
+                # print(f"Z1 adjusted to {z1}")
+
+
+            elif action == 2:
+                print("Action 2: Z2 Latent Space Manipulation")
+                grad_sign = torch.sign(z2.grad) if z2.grad is not None else torch.ones_like(z2)
+                z2 = z2 + 0.05 * grad_sign * z2
+                z2 = z2 + torch.randn_like(z2) * 0.01  # Noise Injection
+                # print(f"Z2 adjusted to {z2}")
+                # np.savetxt('z2.txt', z2.detach().cpu().numpy())
+
+
+            elif action == 3:
+                print("Action 3: Dynamic Dropout Adjustment")
+                # Dynamic Dropout Adjustment
+                for module in self.generator.modules():
+                    if isinstance(module, torch.nn.Dropout):
+                        if self.best_loss < self.previous_loss:
+                            module.p = min(0.5, module.p + 0.05)
+                            print(f"Dropout probability adjusted to {module}.")
+                        else:
+                            module.p = max(0.1, module.p - 0.05)
+                            print(f"Dropout probability adjusted to {module}.")
+
+
+            elif action == 4:
+                print("Action 4: Parameter Perturbation")
+                # Apply a slight perturbation to all generator parameters
+                with torch.no_grad():
+                    for param in self.generator.parameters():
+                        param.add_(torch.randn_like(param) * 0.001)
+                        print(f"Parameter perturbation applied to {param.shape} parameter")
+
+
+        best_mse = float('inf')
+        best_predicted_points = None
+        for _ in range(num_sample):
+            fake = self.generator(points, z1, z2, points21)
+
+            processed_fake = []
+            for i in range(fake.size(0)):
+                img_tensor = fake[i,0,:,:].detach().cpu()
+                processed_tensor = self.process_image_tensor(img_tensor)
+                processed_fake.append(processed_tensor)
+            processed_batch = torch.stack(processed_fake).unsqueeze(1).to(self.device)
+            processed_batch = processed_batch.float()
+            # self.visualize_images(processed_batch, num_images=5)
+
+            extracted_positions = self.extract_positions(processed_batch)
+
+            # Predict points using pre-trained CNN
+            predicted_points = self.pre_trained_cnn(processed_batch, extracted_positions)
+            # print(f"Batch {i} size after model: {predicted_points.size(0)}")
+            # print('Predicted points shape:', predicted_points.shape)
+            # Calculate MSE loss between predicted and original points
+            mse = torch.nn.MSELoss()(predicted_points, points_original).item()
+
+            if mse < best_mse:
+                best_mse = mse
+                best_predicted_points = predicted_points
+
+        reward = -best_mse
+
+        self.mse_values.append(best_mse)
+
+
+        if len(self.mse_values) > self.mse_window_size:
+            self.mse_values.pop(0)
+
+        avg_mse = np.mean(self.mse_values)
+        print(f"Average MSE: {avg_mse:.7f}")
+        done = False
+
+
+        mse_thresholds = [0.09, 0.008, 0.001, 0.0005] 
+        current_threshold = mse_thresholds[len(self.successful_actions)] if len(self.successful_actions) < len(
+            mse_thresholds) else mse_thresholds[-1]
+
+        # done = best_mse < current_threshold
+
+        if epoch >= self.current_epoch + self.stability_epochs:
+            if best_mse < self.best_loss:
+                self.previous_loss = self.best_loss
+                self.best_loss = best_mse
+                self.no_improvement_counter = 0
+                print(f"Best MSE: {best_mse:.7f}")
+
+                # self.successful_actions.add(action)
+
+                # Update loss window and check for stability
+                self.loss_window.append(best_mse)
+                if len(self.loss_window) > self.max_window_size:
+                    self.loss_window.pop(0)
+
+                if np.std(self.loss_window) > self.stability_threshold:
+                    reward -= 1  # Penalize instability
+                    print("Instability detected. Penalizing reward.")
+
+
+                if avg_mse < current_threshold:
+                    print(f"Average MSE {avg_mse:.7f} is below current threshold {current_threshold:.7f}.")
+                    done = True
+            else:
+                self.no_improvement_counter += 1
+                print(f"No improvement for {self.no_improvement_counter} epochs. Reverting to previous parameters.")
+                self.load_parameters(self.previous_params)
+                self.best_loss = self.previous_loss
+
+                if avg_mse > current_threshold:
+                    print(f"Average MSE {avg_mse:.7f} exceeds current threshold {current_threshold:.7f}")
+                    if self.previous_params is not None:
+                        self.load_parameters(self.previous_params)
+                        self.best_loss = self.previous_loss
+                        return self.reset(), reward, True
+                    else:
+                        raise ValueError("No parameters to load. Ensure parameters are saved correctly.")
+
+            if self.no_improvement_counter > self.max_no_improvement_epochs:  # hard reset
+                print("No improvement for too long, resetting DQN.")
+                self.reset()
+                self.no_improvement_counter = 0  
+                self.successful_actions.clear()  
+                self.replay_buffer.clear()  
+
+        new_state = (best_predicted_points - points_original).detach().cpu().numpy().flatten()
+        self.replay_buffer.append((points, z1, z2, points21, points_original, best_mse))
+
+        if len(self.replay_buffer) >= self.batch_size:
+            self.experience_replay()
+
+        return new_state, reward, done
+
+    def reset(self):
+        # Reset conditions or counters if necessary
+        self.no_improvement_counter = 0
+        self.loss_window = []
+        return torch.zeros(21)
+
+    def render(self):
+        pass
+
+    def experience_replay(self):
+        # Sample a batch of experiences from the replay buffer
+        replay_samples = random.sample(self.replay_buffer, self.batch_size)
+
+        for points, z1, z2, points21, points_original, _ in replay_samples:
+            fake = self.generator(points, z1, z2, points21)
+            extracted_positions = self.extract_positions(fake)
+            predicted_points = self.pre_trained_cnn(fake, extracted_positions)
+            loss = torch.nn.MSELoss()(predicted_points, points_original)
+
+            self.opt_gen.zero_grad()
+            loss.backward()
+            self.opt_gen.step()
+
+
+
+
+if __name__ == "__main__":
+    def test_save_load_parameters(env):
+        # Save original parameters
+        original_params = env.save_parameters()
+
+        # Modify parameters
+        for name, param in env.generator.named_parameters():
+            param.data.add_(torch.randn_like(param) * 0.1)
+
+        # Load the original parameters
+        env.load_parameters(original_params)
+
+        # Verify parameters are the same as before
+        for name, param in env.generator.named_parameters():
+            assert torch.equal(param, original_params[name]), f"Parameter {name} did not match after reloading."
+
+        print("All parameters match after reloading. Test passed.")
+
+    from model_v2 import Generator, Critic
+    test_save_load_parameters(ENV(generator=Generator, critic=Critic, pre_trained_cnn=None, device=None, num_layers=3, opt_gen=None, stability_threshold=0.1,
+                 max_no_improvement_epochs=100, replay_buffer_size=10000, batch_size=64, mse_threshold=4e-4,
+                 stability_epochs=5))
