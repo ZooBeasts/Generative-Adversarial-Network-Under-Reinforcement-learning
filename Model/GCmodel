@@ -37,49 +37,110 @@ class Critic(nn.Module):
 
 
 
+class ConditionalBatchNorm2d(nn.Module):
+    def __init__(self, num_features, num_conditions):
+        super(ConditionalBatchNorm2d, self).__init__()
+        self.num_features = num_features
+        self.condition_transform = nn.Linear(num_conditions, num_conditions)
+
+        # Instance normalization before batch norm to stabilize input range
+        self.instance_norm = nn.InstanceNorm2d(num_features, affine=False, track_running_stats=False)
+
+        self.bn = nn.BatchNorm2d(num_features, affine=False)
+        self.gamma_embed = nn.Linear(num_conditions, num_features)
+        # self.beta_embed = nn.Linear(num_conditions, num_features)
+
+        # Initialize gamma close to 1 and beta close to 0
+        # self.gamma_embed.weight.data.normal_(1.0, 0.02)
+        self.gamma_embed.weight.data.normal_(0.0, 0.01)
+        # self.beta_embed.weight.data.zero_()
+
+    def forward(self, x, conditions):
+        batch_size = x.size(0)
+        if conditions.size(0) != batch_size:
+            raise ValueError(
+                f"Batch size of conditions ({conditions.size(0)}) does not match input batch size ({batch_size})")
+
+        # Apply instance normalization to stabilize the input
+        x = self.instance_norm(x)
+        gamma = self.gamma_embed(conditions)
+        # beta = self.beta_embed(conditions)
+        # Reshape gamma and beta to match [batch_size, num_features, 1, 1]
+        gamma = gamma.view(batch_size, self.num_features, 1, 1)
+        beta = torch.zeros_like(gamma)
+        # beta = beta.view(batch_size, self.num_features, 1, 1)
+
+        # Apply batch normalization, then scale and shift
+        out = self.bn(x)
+        out = gamma * out + beta
+        return out
+
+
+
 class Generator(nn.Module):
-    def __init__(self, channels_noise, z_dim1, z_dim2, nc, features_g):
+    def __init__(self, channels_noise, z_dim1, z_dim2, nc, features_g, num_conditions):
         super(Generator, self).__init__()
 
         total_input_dim = z_dim1 + z_dim2 + channels_noise
+        # total_input_dim = z_dim1 + z_dim2
+        self.num_conditions = num_conditions
 
-        self.net = nn.Sequential(
-            # First block (latent vector input)
-            self._block(total_input_dim, features_g * 16, 4, 1, 0),  # 4x4
+        self.net = nn.ModuleList([
+            self._block(total_input_dim, features_g * 16, 4, 1, 0, num_conditions),  # 4x4
+            self._block(features_g * 16, features_g * 8, 4, 2, 1, num_conditions),  # 8x8
+            self._block(features_g * 8, features_g * 4, 4, 2, 1, num_conditions),  # 16x16
+            self._block(features_g * 4, features_g * 2, 4, 2, 1, num_conditions),  # 32x32
+              # Output image 64x64
+        ])
+        self.dropout = nn.Dropout(p=0.4)  # Dropout layer to be controlled by DQN
+        self.final_conv = nn.ConvTranspose2d(features_g * 2, nc, kernel_size=4, stride=2, padding=1)
+        self.tanh = nn.Tanh()
 
-            # Second block
-            self._block(features_g * 16, features_g * 8, 4, 2, 1),  # 8x8
-
-            # Third block
-            self._block(features_g * 8, features_g * 4, 4, 2, 1),  # 16x16
-
-            # Fourth block
-            self._block(features_g * 4, features_g * 2, 4, 2, 1),  # 32x32
-
-            # Dropout Layer (Added to be controlled by DQN)
-            nn.Dropout(p=0.4),  # Initial dropout rate can be modified
-
-            # Output block
-            nn.ConvTranspose2d(features_g * 2, nc, kernel_size=4, stride=2, padding=1),
-            nn.Tanh(),  # Output image 64x64
-        )
-
-    def _block(self, in_channels, out_channels, kernel_size, stride, padding):
-        return nn.Sequential(
-            nn.ConvTranspose2d(
+    def _block(self, in_channels, out_channels, kernel_size, stride, padding, num_conditions):
+        return nn.ModuleDict({
+            'conv': nn.ConvTranspose2d(
                 in_channels, out_channels, kernel_size, stride, padding, bias=False,
             ),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
-        )
+            # 'cbn': ConditionalBatchNorm2d(out_channels, num_conditions),
+            'cbn': nn.BatchNorm2d(out_channels, affine=True),
+            'relu': nn.ReLU(), #ELU
+        })
 
-    def forward(self, points,z1,z2):
-        x = torch.cat((points,z1,z2),dim=1)
-
-        return self.net(x)
+    def forward(self, points, z1, z2, conditions):
+        x = torch.cat((points,z1, z2), dim=1)
+        # conditions = (conditions - conditions.min()) / (conditions.max() - conditions.min())  # Rescale to 0-1
+        conditions = conditions * 2 - 1  # Normalize conditions to [-1, 1]
+        # conditions = self.condition_transform(conditions)
+        for layer in self.net:
+        # for i, layer in enumerate(self.net):
+            x = layer['conv'](x)
+            # gamma = layer['cbn'].weight.data
+            # print("BatchNorm2d Gamma (weight):", layer['cbn'].weight.data)
+            # print("BatchNorm2d Beta (bias):", layer['cbn'].bias.data)
+            # gamma = layer['cbn'].gamma_embed(conditions)
+            # beta = layer['cbn'].beta_embed(conditions)
+            # print(f"Layer {i}: Gamma mean {gamma.mean().item()}, std {gamma.std().item()}")
+            # print(f"Layer {i}: Beta mean {beta.mean().item()}, std {beta.std().item()}")
+            x = layer['cbn'](x)
+            x = layer['relu'](x)
+        x = self.dropout(x)  # Apply dropout
+        x = self.final_conv(x)  # Apply final conv layer
+        x = self.tanh(x)  # Apply Tanh activation
+        return x
 
 
 def initialize_weights(model):
     for m in model.modules():
         if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.BatchNorm2d)):
-            nn.init.normal_(m.weight.data, 0.0, 0.02)
+            if m.weight is not None:  # Ensure that weight is not None
+                nn.init.normal_(m.weight.data, 0.0, 0.02)
+            if m.bias is not None:  # Initialize bias if it exists
+                nn.init.constant_(m.bias.data, 0.0)
+
+
+
+if __name__ == "__main__":
+
+    generator = Generator(channels_noise=150, z_dim1=100, z_dim2=100, nc=1, features_g=64, num_conditions=150)
+    for name, param in generator.named_parameters():
+        print(f"Parameter name: {name}, Size: {param.size()}, Mean: {param.mean().item()}")
