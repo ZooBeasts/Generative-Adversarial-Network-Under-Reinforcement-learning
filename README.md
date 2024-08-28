@@ -18,6 +18,9 @@ The pre-trained model training loss is 1.9e-5 and val loss is 1.87e-5 and test l
 Therefore, the MSE threshold set is [0.09, 0.008, 0.001,0.0005]
 
 
+
+
+--------------------------------------------------------------------------------
 Actions are taken sequentially in training as follows but in the author's training situations. Action choices might change during to different configurations.
 
 ### Action 1 Changing Z2 latent, stable for 30 epochs, MSE checked 6e-2, lower than 0.09 MSE threshold, training continues.
