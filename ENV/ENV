@@ -39,12 +39,16 @@ class ENV:
         params = {name: param.clone() for name, param in self.generator.named_parameters()}
         print("Saving parameters:")
         torch.save(params, 'params.pth')
+        # for name, param in params.items():
+        #     print(f"{name}: {param.mean().item()}")  # Print parameter name and mean value
         return params
 
     def save_parameters_2(self):
         params = {name: param.clone() for name, param in self.generator.named_parameters()}
         # print("Saving parameters:")
         torch.save(params, 'dqnparams.pth')
+        # for name, param in params.items():
+        #     print(f"{name}: {param.mean().item()}")  # Print parameter name and mean value
         return params
 
     def load_parameters(self, saved_params):
@@ -126,8 +130,7 @@ class ENV:
             if self.previous_params is None:
                 raise ValueError("Parameters were not saved correctly.")
             self.current_epoch = epoch
-            
-
+            # Save parameters at the start of every action interval
         if epoch > warmup_epochs and epoch % self.stability_epochs == 0:
             print("Saving parameters at the start of the stability interval.")
             self.previous_params = self.save_parameters()
@@ -227,10 +230,8 @@ class ENV:
         done = False
 
 
-        mse_thresholds = [0.09, 0.008, 0.001, 0.0005] 
-        current_threshold = mse_thresholds[len(self.successful_actions)] if len(self.successful_actions) < len(
-            mse_thresholds) else mse_thresholds[-1]
-
+        mse_thresholds = [0.09, 0.008, 0.001, 0.0005]  # Example thresholds
+        current_threshold = mse_thresholds[0]
         # done = best_mse < current_threshold
 
         if epoch >= self.current_epoch + self.stability_epochs:
@@ -240,7 +241,15 @@ class ENV:
                 self.no_improvement_counter = 0
                 print(f"Best MSE: {best_mse:.7f}")
 
-                # self.successful_actions.add(action)
+
+                if avg_mse < current_threshold:
+                    print(f"Average MSE {avg_mse:.7f} is below current threshold {current_threshold:.7f}.")
+                    done = True
+                    if current_threshold != mse_thresholds[-1]:
+                        next_index = mse_thresholds.index(current_threshold) + 1
+                        if next_index < len(mse_thresholds):
+                            current_threshold = mse_thresholds[next_index]
+                            print(f"Moving to the next MSE threshold: {current_threshold:.7f}")
 
                 # Update loss window and check for stability
                 self.loss_window.append(best_mse)
@@ -252,9 +261,10 @@ class ENV:
                     print("Instability detected. Penalizing reward.")
 
 
-                if avg_mse < current_threshold:
-                    print(f"Average MSE {avg_mse:.7f} is below current threshold {current_threshold:.7f}.")
-                    done = True
+
+
+
+
             else:
                 self.no_improvement_counter += 1
                 print(f"No improvement for {self.no_improvement_counter} epochs. Reverting to previous parameters.")
@@ -270,12 +280,12 @@ class ENV:
                     else:
                         raise ValueError("No parameters to load. Ensure parameters are saved correctly.")
 
-            if self.no_improvement_counter > self.max_no_improvement_epochs:  # hard reset
+            if self.no_improvement_counter > self.max_no_improvement_epochs:
                 print("No improvement for too long, resetting DQN.")
-                self.reset()
-                self.no_improvement_counter = 0  
-                self.successful_actions.clear()  
-                self.replay_buffer.clear()  
+                self.reset()  # Reset the DQN agent completely
+                self.no_improvement_counter = 0  # Reset counter after action adjustment
+                self.successful_actions.clear()  # Clear the history of successful actions
+                self.replay_buffer.clear()  # Clear the replay buffer
 
         new_state = (best_predicted_points - points_original).detach().cpu().numpy().flatten()
         self.replay_buffer.append((points, z1, z2, points21, points_original, best_mse))
@@ -311,6 +321,8 @@ class ENV:
 
 
 
+
+
 if __name__ == "__main__":
     def test_save_load_parameters(env):
         # Save original parameters
@@ -331,5 +343,5 @@ if __name__ == "__main__":
 
     from model_v2 import Generator, Critic
     test_save_load_parameters(ENV(generator=Generator, critic=Critic, pre_trained_cnn=None, device=None, num_layers=3, opt_gen=None, stability_threshold=0.1,
-                 max_no_improvement_epochs=100, replay_buffer_size=10000, batch_size=64, mse_threshold=4e-4,
+                 max_no_improvement_epochs=100, replay_buffer_size=10000, batch_size=64,
                  stability_epochs=5))
