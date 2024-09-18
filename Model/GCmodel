@@ -92,7 +92,7 @@ class Generator(nn.Module):
             self._block(features_g * 4, features_g * 2, 4, 2, 1, num_conditions),  # 32x32
               # Output image 64x64
         ])
-        self.dropout = nn.Dropout(p=0.4)  # Dropout layer to be controlled by DQN
+        self.dropout = nn.Dropout(p=0.4) 
         self.final_conv = nn.ConvTranspose2d(features_g * 2, nc, kernel_size=4, stride=2, padding=1)
         self.tanh = nn.Tanh()
 
@@ -107,10 +107,7 @@ class Generator(nn.Module):
         })
 
     def forward(self, points, z1, z2, conditions):
-        x = torch.cat((points,z1, z2), dim=1)
-        # conditions = (conditions - conditions.min()) / (conditions.max() - conditions.min())  # Rescale to 0-1
-        conditions = conditions * 2 - 1  # Normalize conditions to [-1, 1]
-        # conditions = self.condition_transform(conditions)
+        x = torch.cat((points,z1, z2), dim=1))
         for layer in self.net:
         # for i, layer in enumerate(self.net):
             x = layer['conv'](x)
@@ -123,9 +120,9 @@ class Generator(nn.Module):
             # print(f"Layer {i}: Beta mean {beta.mean().item()}, std {beta.std().item()}")
             x = layer['cbn'](x)
             x = layer['relu'](x)
-        x = self.dropout(x)  # Apply dropout
-        x = self.final_conv(x)  # Apply final conv layer
-        x = self.tanh(x)  # Apply Tanh activation
+        x = self.dropout(x)  
+        x = self.final_conv(x)  
+        x = self.tanh(x)  
         return x
 
 
